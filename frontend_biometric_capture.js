@@ -24,30 +24,44 @@ class BiometricCapture {
 
     // Device Fingerprinting
     captureDeviceFingerprint() {
-        const canvas = document.createElement('canvas');
-        const ctx = canvas.getContext('2d');
-        ctx.textBaseline = 'top';
-        ctx.font = '14px Arial';
-        ctx.fillText('Device fingerprint', 2, 2);
+        try {
+            const canvas = document.createElement('canvas');
+            const ctx = canvas.getContext('2d');
+            ctx.textBaseline = 'top';
+            ctx.font = '14px Arial';
+            ctx.fillText('Device fingerprint', 2, 2);
 
-        this.patterns.device = {
-            userAgent: navigator.userAgent,
-            language: navigator.language,
-            platform: navigator.platform,
-            screenResolution: `${screen.width}x${screen.height}`,
-            colorDepth: screen.colorDepth,
-            timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-            canvasFingerprint: canvas.toDataURL(),
-            hardwareConcurrency: navigator.hardwareConcurrency || 'unknown',
-            deviceMemory: navigator.deviceMemory || 'unknown',
-            cookieEnabled: navigator.cookieEnabled,
-            doNotTrack: navigator.doNotTrack,
-            plugins: Array.from(navigator.plugins).map(p => p.name),
-            timestamp: Date.now()
-        };
+            this.patterns.device = {
+                userAgent: navigator.userAgent || 'unknown',
+                language: navigator.language || 'unknown',
+                platform: navigator.platform || 'unknown',
+                screenResolution: `${screen.width}x${screen.height}`,
+                colorDepth: screen.colorDepth || 24,
+                timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'unknown',
+                canvasFingerprint: canvas.toDataURL(),
+                hardwareConcurrency: navigator.hardwareConcurrency || 4,
+                deviceMemory: navigator.deviceMemory || 8,
+                cookieEnabled: navigator.cookieEnabled || false,
+                doNotTrack: navigator.doNotTrack || 'unknown',
+                plugins: Array.from(navigator.plugins || []).map(p => p.name),
+                timestamp: Date.now()
+            };
 
-        // Get IP and connection info (would need backend call)
-        this.getNetworkInfo();
+            console.log('Device fingerprint captured:', this.patterns.device);
+            
+            // Get IP and connection info (would need backend call)
+            this.getNetworkInfo();
+        } catch (error) {
+            console.error('Error capturing device fingerprint:', error);
+            // Fallback minimal device fingerprint
+            this.patterns.device = {
+                userAgent: navigator.userAgent || 'unknown',
+                platform: navigator.platform || 'unknown',
+                screenResolution: `${screen.width}x${screen.height}`,
+                colorDepth: screen.colorDepth || 24,
+                timestamp: Date.now()
+            };
+        }
     }
 
     async getNetworkInfo() {
@@ -89,6 +103,10 @@ class BiometricCapture {
     startCapture() {
         this.isCapturing = true;
         this.startTime = Date.now();
+        
+        // Ensure device fingerprint is captured before starting
+        this.captureDeviceFingerprint();
+        
         this.patterns = {
             keystroke: [],
             mouse: [],

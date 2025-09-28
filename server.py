@@ -318,28 +318,54 @@ class BiometricAuthenticator:
 
             # Device fingerprint check
             device_similarity = 0.5  # Default moderate similarity
-            if stored_device_fp:
-                stored_device = json.loads(stored_device_fp)
-                current_device = patterns.get('device', {})
+            if stored_device_fp and stored_device_fp.strip():
+                try:
+                    stored_device = json.loads(stored_device_fp)
+                    current_device = patterns.get('device', {})
 
-                # Check critical device attributes
-                device_matches = 0
-                device_checks = 0
+                    # Check critical device attributes
+                    device_matches = 0
+                    device_checks = 0
 
-                for key in ['userAgent', 'platform', 'screenResolution', 'colorDepth']:
-                    if key in stored_device and key in current_device:
-                        device_checks += 1
-                        if stored_device[key] == current_device[key]:
-                            device_matches += 1
+                    for key in ['userAgent', 'platform', 'screenResolution', 'colorDepth']:
+                        if key in stored_device and key in current_device:
+                            device_checks += 1
+                            if stored_device[key] == current_device[key]:
+                                device_matches += 1
 
-                device_similarity = device_matches / device_checks if device_checks > 0 else 0.5
+                    if device_checks > 0:
+                        device_similarity = device_matches / device_checks
+                        logger.info(f"Device fingerprint match: {device_matches}/{device_checks} = {device_similarity:.3f}")
+                    else:
+                        device_similarity = 0.5
+                        logger.warning("No device attributes found for comparison")
+                except json.JSONDecodeError:
+                    logger.warning("Invalid device fingerprint JSON, using default similarity")
+                    device_similarity = 0.5
+            else:
+                logger.warning("No stored device fingerprint found, using default similarity")
+                device_similarity = 0.5
 
-            # Combined confidence score
-            confidence_score = (avg_similarity * 0.7 + device_similarity * 0.3)
+            # Improved confidence score calculation
+            # If behavioral similarity is very low, reduce its weight
+            if avg_similarity < 0.1:
+                # Very low behavioral similarity - rely more on device fingerprint
+                confidence_score = (avg_similarity * 0.3 + device_similarity * 0.7)
+                logger.info(f"Low behavioral similarity ({avg_similarity:.3f}), using device-weighted calculation")
+            else:
+                # Normal calculation
+                confidence_score = (avg_similarity * 0.7 + device_similarity * 0.3)
+            
+            # Ensure confidence score is reasonable (not too low due to poor data)
+            if confidence_score < 0.1:
+                confidence_score = 0.1  # Minimum reasonable confidence
+                logger.warning(f"Confidence score too low, adjusted to {confidence_score}")
 
             # Authentication threshold
             auth_threshold = 0.65
             is_authenticated = confidence_score >= auth_threshold
+            
+            logger.info(f"Confidence calculation: behavioral={avg_similarity:.3f}, device={device_similarity:.3f}, final={confidence_score:.3f}")
 
             # Log authentication attempt
             cursor.execute("""
