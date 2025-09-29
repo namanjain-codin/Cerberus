@@ -257,10 +257,12 @@ class BiometricCapture {
 
         let lastKeyUp = null;
 
+        const downSequence = [];
         for (let i = 0; i < keystrokes.length; i++) {
             const current = keystrokes[i];
 
             if (current.type === 'down') {
+                downSequence.push(current);
                 // Find corresponding keyup
                 for (let j = i + 1; j < keystrokes.length; j++) {
                     if (keystrokes[j].key === current.key && keystrokes[j].type === 'up') {
@@ -295,6 +297,20 @@ class BiometricCapture {
         }
 
         features.typingSpeed = keystrokes.filter(k => k.type === 'down').length / (Date.now() - this.startTime) * 60000; // WPM
+
+        // Attach raw events to allow backend to compute advanced features
+        features.rawEvents = keystrokes;
+        // Reconstruct a simple typed string from down events
+        let typedChars = [];
+        for (const ev of downSequence) {
+            if (typeof ev.key === 'string') {
+                if (ev.key.length === 1) typedChars.push(ev.key);
+                else if (ev.key === 'Space' || ev.key === ' ') typedChars.push(' ');
+                else if (ev.key === 'Comma') typedChars.push(',');
+                else if (ev.key === 'Period') typedChars.push('.');
+            }
+        }
+        features.typedString = typedChars.join('');
 
         return features;
     }

@@ -18,6 +18,8 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
 from sklearn.model_selection import train_test_split
 from scipy.spatial.distance import euclidean
+from scipy import stats as scipy_stats
+from scipy.stats import entropy as shannon_entropy
 import logging
 from gmm_keystroke import train_gmm_model
 from keystroke_knn import run_keystroke_knn
@@ -108,6 +110,24 @@ class BiometricAuthenticator:
         if 'keystroke' in patterns and patterns['keystroke']:
             keystroke = patterns['keystroke']
 
+            # Advanced keystroke metrics (robust typing-centric features)
+            try:
+                adv = self._compute_advanced_keystroke_features(keystroke)
+            except Exception:
+                adv = {}
+            for name in [
+                'ppd_avg','rpd_avg','rrd_avg',
+                'pause_count','avg_burst_length',
+                'dwell_skewness','dwell_kurtosis','flight_skewness','flight_kurtosis',
+                'flight_time_entropy','htp_avg','ftp_avg',
+                'backspace_rate','delete_rate','arrow_key_rate',
+                'flight_space_avg','flight_punct_avg',
+                'dg_th_avg','dg_he_avg','dg_in_avg','dg_er_avg','dg_an_avg','dg_re_avg','dg_on_avg','dg_at_avg','dg_en_avg','dg_nd_avg',
+                'tg_the_pp_avg','tg_and_pp_avg','tg_ing_pp_avg','tg_ent_pp_avg','tg_ion_pp_avg'
+            ]:
+                features.append(adv.get(name, 0))
+                feature_names.append(name)
+
             # Average dwell times for common keys
             common_keys = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n', 'o', 'p', 'q', 'r', 's', 't', 'u', 'v', 'w', 'x', 'y', 'z']
             for key in common_keys:
@@ -156,6 +176,176 @@ class BiometricAuthenticator:
         # Touch/swipe gesture features removed
 
         return np.array(features), feature_names
+
+    def _compute_advanced_keystroke_features(self, keystroke_obj: dict):
+        """Compute PP/RP/RR, pause/burst, error rates, distribution stats, entropy, and proportions.
+        Expects keystroke_obj to contain rawEvents (list) and typedString (str) optionally.
+        """
+        out = {}
+        raw = keystroke_obj.get('rawEvents') or []
+        typed = keystroke_obj.get('typedString') or ''
+
+        # Build per-key instance timings (first-order, simple implementation)
+        press_times = []
+        release_times = []
+        dwell_times_seq = []
+        flight_times_seq = []
+
+        last_release = None
+        # Map index to event for sequence handling
+        for i, ev in enumerate(raw):
+            if ev.get('type') == 'down':
+                # find matching up
+                up_time = None
+                for j in range(i + 1, min(i + 80, len(raw))):  # bounded search
+                    ev2 = raw[j]
+                    if ev2.get('type') == 'up' and ev2.get('key') == ev.get('key'):
+                        up_time = ev2.get('timestamp')
+                        break
+                if up_time is not None:
+                    hold = max(0, up_time - ev.get('timestamp'))
+                    dwell_times_seq.append(hold)
+                press_times.append({'key': ev.get('key'), 'press': ev.get('timestamp'), 'release': up_time})
+                if last_release is not None:
+                    flight_times_seq.append(max(0, ev.get('timestamp') - last_release))
+            elif ev.get('type') == 'up':
+                last_release = ev.get('timestamp')
+                release_times.append(ev.get('timestamp'))
+
+        # Compute PP/RP/RR on consecutive chars in typed string when available
+        ppd_list, rpd_list, rrd_list = [], [], []
+        digraph_map = {}  # key pair -> list of flight (RPD)
+        trigraph_map = {} # three keys -> list of PP over k and k+2
+        if typed and len(typed) >= 2:
+            # Build a simple mapping of first occurrence times (approx)
+            key_index = 0
+            time_map = {}
+            for ev in raw:
+                if ev.get('type') == 'down' and key_index < len(typed):
+                    k = typed[key_index]
+                    time_map.setdefault(key_index, {'key': k, 'press': ev.get('timestamp')})
+                if ev.get('type') == 'up' and key_index < len(typed):
+                    if key_index in time_map and 'release' not in time_map[key_index]:
+                        time_map[key_index]['release'] = ev.get('timestamp')
+                        key_index += 1
+            for i in range(len(typed) - 1):
+                t1 = time_map.get(i)
+                t2 = time_map.get(i + 1)
+                if t1 and t2 and 'press' in t1 and 'release' in t1 and 'press' in t2 and 'release' in t2:
+                    ppd_list.append(t2['press'] - t1['press'])
+                    rpd_list.append(t2['press'] - t1['release'])
+                    rrd_list.append(t2['release'] - t1['release'])
+                    dg = f"{t1['key']}{t2['key']}"
+                    digraph_map.setdefault(dg, []).append(t2['press'] - t1['release'])
+            # Trigraphs (press i to press i+2)
+            for i in range(len(typed) - 2):
+                t1 = time_map.get(i)
+                t3 = time_map.get(i + 2)
+                if t1 and t3 and 'press' in t1 and 'press' in t3:
+                    tg = f"{t1['key']}{time_map.get(i+1,{}).get('key','')}{t3['key']}"
+                    trigraph_map.setdefault(tg, []).append(t3['press'] - t1['press'])
+
+        out['ppd_avg'] = float(np.mean(ppd_list)) if ppd_list else 0.0
+        out['rpd_avg'] = float(np.mean(rpd_list)) if rpd_list else 0.0
+        out['rrd_avg'] = float(np.mean(rrd_list)) if rrd_list else 0.0
+
+        # Pause and burst metrics
+        pause_threshold = 200.0
+        bursts = []
+        current_burst = 0
+        for ft in flight_times_seq:
+            if ft > pause_threshold:
+                if current_burst > 0:
+                    bursts.append(current_burst)
+                current_burst = 0
+            else:
+                current_burst += 1
+        if current_burst > 0:
+            bursts.append(current_burst)
+        out['pause_count'] = int(len([ft for ft in flight_times_seq if ft > pause_threshold]))
+        out['avg_burst_length'] = float(np.mean(bursts)) if bursts else 0.0
+
+        # Distributional stats
+        if len(dwell_times_seq) > 1:
+            out['dwell_skewness'] = float(scipy_stats.skew(dwell_times_seq))
+            out['dwell_kurtosis'] = float(scipy_stats.kurtosis(dwell_times_seq))
+        else:
+            out['dwell_skewness'] = 0.0
+            out['dwell_kurtosis'] = 0.0
+        if len(flight_times_seq) > 1:
+            out['flight_skewness'] = float(scipy_stats.skew(flight_times_seq))
+            out['flight_kurtosis'] = float(scipy_stats.kurtosis(flight_times_seq))
+        else:
+            out['flight_skewness'] = 0.0
+            out['flight_kurtosis'] = 0.0
+
+        # Entropy of flight time distribution
+        if len(flight_times_seq) > 1:
+            hist, _ = np.histogram(np.array(flight_times_seq), bins=10, density=True)
+            # Avoid zero-only hist
+            if np.any(hist):
+                out['flight_time_entropy'] = float(shannon_entropy(hist, base=2))
+            else:
+                out['flight_time_entropy'] = 0.0
+        else:
+            out['flight_time_entropy'] = 0.0
+
+        # Proportion features (HTP/FTP) using successive pairs where possible
+        htp_vals, ftp_vals = [] , []
+        # align dwell and flight by sequence best-effort
+        m = min(len(dwell_times_seq), len(flight_times_seq))
+        for i in range(m):
+            ht = dwell_times_seq[i]
+            ft = flight_times_seq[i]
+            cycle = ht + ft
+            if cycle > 0:
+                htp_vals.append(ht / cycle)
+                ftp_vals.append(ft / cycle)
+        out['htp_avg'] = float(np.mean(htp_vals)) if htp_vals else 0.0
+        out['ftp_avg'] = float(np.mean(ftp_vals)) if ftp_vals else 0.0
+
+        # Error/correction behavior
+        error_counts = {'Backspace': 0, 'Delete': 0, 'ArrowLeft': 0, 'ArrowRight': 0}
+        char_count = 0
+        for ev in raw:
+            if ev.get('type') == 'down':
+                k = ev.get('key')
+                if isinstance(k, str) and len(k) == 1:
+                    char_count += 1
+                if k in error_counts:
+                    error_counts[k] += 1
+        total_chars = char_count if char_count > 0 else 1
+        out['backspace_rate'] = error_counts['Backspace'] / total_chars
+        out['delete_rate'] = error_counts['Delete'] / total_chars
+        out['arrow_key_rate'] = (error_counts['ArrowLeft'] + error_counts['ArrowRight']) / total_chars
+
+        # Punctuation/space timing (average flight into/out of space)
+        space_flights = []
+        punct_flights = []
+        for i in range(len(typed) - 1):
+            # approximate using digraph_map entries built above
+            pair = f"{typed[i]}{typed[i+1]}"
+            vals = digraph_map.get(pair, [])
+            if not vals:
+                continue
+            if typed[i+1] == ' ' or typed[i] == ' ':
+                space_flights.extend(vals)
+            if typed[i] in ',.;:' or typed[i+1] in ',.;:':
+                punct_flights.extend(vals)
+        out['flight_space_avg'] = float(np.mean(space_flights)) if space_flights else 0.0
+        out['flight_punct_avg'] = float(np.mean(punct_flights)) if punct_flights else 0.0
+
+        # Fixed-set digraph/trigraph averages to feed classifier (top English digraphs)
+        top_digraphs = ['th','he','in','er','an','re','on','at','en','nd']
+        for dg in top_digraphs:
+            vals = digraph_map.get(dg, [])
+            out[f'dg_{dg}_avg'] = float(np.mean(vals)) if vals else 0.0
+        top_trigraphs = ['the','and','ing','ent','ion']
+        for tg in top_trigraphs:
+            vals = trigraph_map.get(tg, [])
+            out[f'tg_{tg}_pp_avg'] = float(np.mean(vals)) if vals else 0.0
+
+        return out
 
     def register_user(self, username, password, patterns):
         """Register a new user with their behavioral patterns"""
