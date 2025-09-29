@@ -19,6 +19,8 @@ from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_sc
 from sklearn.model_selection import train_test_split
 from scipy.spatial.distance import euclidean
 import logging
+from gmm_keystroke import train_gmm_model
+from keystroke_knn import run_keystroke_knn
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -46,13 +48,12 @@ class BiometricAuthenticator:
             
             cursor = conn.cursor()
 
-            # Create users table
+            # Create users table (device fingerprint removed)
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS users (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     username TEXT UNIQUE NOT NULL,
                     password_hash TEXT NOT NULL,
-                    device_fingerprint TEXT,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """)
@@ -101,29 +102,14 @@ class BiometricAuthenticator:
         features = []
         feature_names = []
 
-        # Device features
-        if 'device' in patterns:
-            device = patterns['device']
-            features.extend([
-                hash(device.get('userAgent', '')) % 10000,
-                hash(device.get('platform', '')) % 1000,
-                device.get('screenResolution', '1920x1080').count('x'),
-                device.get('colorDepth', 24),
-                device.get('hardwareConcurrency', 4),
-                len(device.get('plugins', [])),
-                hash(device.get('canvasFingerprint', '')) % 100000
-            ])
-            feature_names.extend([
-                'user_agent_hash', 'platform_hash', 'screen_resolution_complexity',
-                'color_depth', 'hardware_concurrency', 'plugins_count', 'canvas_hash'
-            ])
+        # Device fingerprinting removed
 
         # Keystroke features
         if 'keystroke' in patterns and patterns['keystroke']:
             keystroke = patterns['keystroke']
 
             # Average dwell times for common keys
-            common_keys = ['a', 'e', 'i', 'o', 'u', 'n', 't', 'r', 's', 'l']
+            common_keys = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n', 'o', 'p', 'q', 'r', 's', 't', 'u', 'v', 'w', 'x', 'y', 'z']
             for key in common_keys:
                 avg_dwell = keystroke.get('avgDwellTimes', {}).get(key, 100)
                 features.append(avg_dwell)
@@ -134,17 +120,17 @@ class BiometricAuthenticator:
             feature_names.append('typing_speed')
 
             # Flight times for common key pairs
-            common_pairs = ['th', 'he', 'in', 'er', 'an']
+            common_pairs = ['aa', 'ab', 'ac', 'ad', 'ae', 'af', 'ag', 'ah', 'ai', 'aj', 'ak', 'al', 'am', 'an', 'ao', 'ap', 'aq', 'ar', 'as', 'at', 'au', 'av', 'aw', 'ax', 'ay', 'az', 'ba', 'bb', 'bc', 'bd', 'be', 'bf', 'bg', 'bh', 'bi', 'bj', 'bk', 'bl', 'bm', 'bn', 'bo', 'bp', 'bq', 'br', 'bs', 'bt', 'bu', 'bv', 'bw', 'bx', 'by', 'bz', 'ca', 'cb', 'cc', 'cd', 'ce', 'cf', 'cg', 'ch', 'ci', 'cj', 'ck', 'cl', 'cm', 'cn', 'co', 'cp', 'cq', 'cr', 'cs', 'ct', 'cu', 'cv', 'cw', 'cx', 'cy', 'cz', 'da', 'db', 'dc', 'dd', 'de', 'df', 'dg', 'dh', 'di', 'dj', 'dk', 'dl', 'dm', 'dn', 'do', 'dp', 'dq', 'dr', 'ds', 'dt', 'du', 'dv', 'dw', 'dx', 'dy', 'dz', 'ea', 'eb', 'ec', 'ed', 'ee', 'ef', 'eg', 'eh', 'ei', 'ej', 'ek', 'el', 'em', 'en', 'eo', 'ep', 'eq', 'er', 'es', 'et', 'eu', 'ev', 'ew', 'ex', 'ey', 'ez', 'fa', 'fb', 'fc', 'fd', 'fe', 'ff', 'fg', 'fh', 'fi', 'fj', 'fk', 'fl', 'fm', 'fn', 'fo', 'fp', 'fq', 'fr', 'fs', 'ft', 'fu', 'fv', 'fw', 'fx', 'fy', 'fz', 'ga', 'gb', 'gc', 'gd', 'ge', 'gf', 'gg', 'gh', 'gi', 'gj', 'gk', 'gl', 'gm', 'gn', 'go', 'gp', 'gq', 'gr', 'gs', 'gt', 'gu', 'gv', 'gw', 'gx', 'gy', 'gz', 'ha', 'hb', 'hc', 'hd', 'he', 'hf', 'hg', 'hh', 'hi', 'hj', 'hk', 'hl', 'hm', 'hn', 'ho', 'hp', 'hq', 'hr', 'hs', 'ht', 'hu', 'hv', 'hw', 'hx', 'hy', 'hz', 'ia', 'ib', 'ic', 'id', 'ie', 'if', 'ig', 'ih', 'ii', 'ij', 'ik', 'il', 'im', 'in', 'io', 'ip', 'iq', 'ir', 'is', 'it', 'iu', 'iv', 'iw', 'ix', 'iy', 'iz', 'ja', 'jb', 'jc', 'jd', 'je', 'jf', 'jg', 'jh', 'ji', 'jj', 'jk', 'jl', 'jm', 'jn', 'jo', 'jp', 'jq', 'jr', 'js', 'jt', 'ju', 'jv', 'jw', 'jx', 'jy', 'jz', 'ka', 'kb', 'kc', 'kd', 'ke', 'kf', 'kg', 'kh', 'ki', 'kj', 'kk', 'kl', 'km', 'kn', 'ko', 'kp', 'kq', 'kr', 'ks', 'kt', 'ku', 'kv', 'kw', 'kx', 'ky', 'kz', 'la', 'lb', 'lc', 'ld', 'le', 'lf', 'lg', 'lh', 'li', 'lj', 'lk', 'll', 'lm', 'ln', 'lo', 'lp', 'lq', 'lr', 'ls', 'lt', 'lu', 'lv', 'lw', 'lx', 'ly', 'lz', 'ma', 'mb', 'mc', 'md', 'me', 'mf', 'mg', 'mh', 'mi', 'mj', 'mk', 'ml', 'mm', 'mn', 'mo', 'mp', 'mq', 'mr', 'ms', 'mt', 'mu', 'mv', 'mw', 'mx', 'my', 'mz', 'na', 'nb', 'nc', 'nd', 'ne', 'nf', 'ng', 'nh', 'ni', 'nj', 'nk', 'nl', 'nm', 'nn', 'no', 'np', 'nq', 'nr', 'ns', 'nt', 'nu', 'nv', 'nw', 'nx', 'ny', 'nz', 'oa', 'ob', 'oc', 'od', 'oe', 'of', 'og', 'oh', 'oi', 'oj', 'ok', 'ol', 'om', 'on', 'oo', 'op', 'oq', 'or', 'os', 'ot', 'ou', 'ov', 'ow', 'ox', 'oy', 'oz', 'pa', 'pb', 'pc', 'pd', 'pe', 'pf', 'pg', 'ph', 'pi', 'pj', 'pk', 'pl', 'pm', 'pn', 'po', 'pp', 'pq', 'pr', 'ps', 'pt', 'pu', 'pv', 'pw', 'px', 'py', 'pz', 'qa', 'qb', 'qc', 'qd', 'qe', 'qf', 'qg', 'qh', 'qi', 'qj', 'qk', 'ql', 'qm', 'qn', 'qo', 'qp', 'qq', 'qr', 'qs', 'qt', 'qu', 'qv', 'qw', 'qx', 'qy', 'qz', 'ra', 'rb', 'rc', 'rd', 're', 'rf', 'rg', 'rh', 'ri', 'rj', 'rk', 'rl', 'rm', 'rn', 'ro', 'rp', 'rq', 'rr', 'rs', 'rt', 'ru', 'rv', 'rw', 'rx', 'ry', 'rz', 'sa', 'sb', 'sc', 'sd', 'se', 'sf', 'sg', 'sh', 'si', 'sj', 'sk', 'sl', 'sm', 'sn', 'so', 'sp', 'sq', 'sr', 'ss', 'st', 'su', 'sv', 'sw', 'sx', 'sy', 'sz', 'ta', 'tb', 'tc', 'td', 'te', 'tf', 'tg', 'th', 'ti', 'tj', 'tk', 'tl', 'tm', 'tn', 'to', 'tp', 'tq', 'tr', 'ts', 'tt', 'tu', 'tv', 'tw', 'tx', 'ty', 'tz', 'ua', 'ub', 'uc', 'ud', 'ue', 'uf', 'ug', 'uh', 'ui', 'uj', 'uk', 'ul', 'um', 'un', 'uo', 'up', 'uq', 'ur', 'us', 'ut', 'uu', 'uv', 'uw', 'ux', 'uy', 'uz', 'va', 'vb', 'vc', 'vd', 've', 'vf', 'vg', 'vh', 'vi', 'vj', 'vk', 'vl', 'vm', 'vn', 'vo', 'vp', 'vq', 'vr', 'vs', 'vt', 'vu', 'vv', 'vw', 'vx', 'vy', 'vz', 'wa', 'wb', 'wc', 'wd', 'we', 'wf', 'wg', 'wh', 'wi', 'wj', 'wk', 'wl', 'wm', 'wn', 'wo', 'wp', 'wq', 'wr', 'ws', 'wt', 'wu', 'wv', 'ww', 'wx', 'wy', 'wz', 'xa', 'xb', 'xc', 'xd', 'xe', 'xf', 'xg', 'xh', 'xi', 'xj', 'xk', 'xl', 'xm', 'xn', 'xo', 'xp', 'xq', 'xr', 'xs', 'xt', 'xu', 'xv', 'xw', 'xx', 'xy', 'xz', 'ya', 'yb', 'yc', 'yd', 'ye', 'yf', 'yg', 'yh', 'yi', 'yj', 'yk', 'yl', 'ym', 'yn', 'yo', 'yp', 'yq', 'yr', 'ys', 'yt', 'yu', 'yv', 'yw', 'yx', 'yy', 'yz', 'za', 'zb', 'zc', 'zd', 'ze', 'zf', 'zg', 'zh', 'zi', 'zj', 'zk', 'zl', 'zm', 'zn', 'zo', 'zp', 'zq', 'zr', 'zs', 'zt', 'zu', 'zv', 'zw', 'zx', 'zy', 'zz']
             for pair in common_pairs:
                 flight_time = keystroke.get('avgFlightTimes', {}).get(f'{pair[0]}_{pair[1]}', 50)
                 features.append(flight_time)
                 feature_names.append(f'flight_time_{pair}')
         else:
             # Pad with zeros if no keystroke data
-            features.extend([0] * 16)  # 10 dwell + 1 speed + 5 flight times
-            feature_names.extend([f'dwell_time_{k}' for k in ['a', 'e', 'i', 'o', 'u', 'n', 't', 'r', 's', 'l']])
+            features.extend([0] * 26)  # 10 dwell + 1 speed + 5 flight times
+            feature_names.extend([f'dwell_time_{k}' for k in ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n', 'o', 'p', 'q', 'r', 's', 't', 'u', 'v', 'w', 'x', 'y', 'z']])
             feature_names.extend(['typing_speed'])
-            feature_names.extend([f'flight_time_{p}' for p in ['th', 'he', 'in', 'er', 'an']])
+            feature_names.extend([f'flight_time_{p}' for p in ['aa', 'ab', 'ac', 'ad', 'ae', 'af', 'ag', 'ah', 'ai', 'aj', 'ak', 'al', 'am', 'an', 'ao', 'ap', 'aq', 'ar', 'as', 'at', 'au', 'av', 'aw', 'ax', 'ay', 'az', 'ba', 'bb', 'bc', 'bd', 'be', 'bf', 'bg', 'bh', 'bi', 'bj', 'bk', 'bl', 'bm', 'bn', 'bo', 'bp', 'bq', 'br', 'bs', 'bt', 'bu', 'bv', 'bw', 'bx', 'by', 'bz', 'ca', 'cb', 'cc', 'cd', 'ce', 'cf', 'cg', 'ch', 'ci', 'cj', 'ck', 'cl', 'cm', 'cn', 'co', 'cp', 'cq', 'cr', 'cs', 'ct', 'cu', 'cv', 'cw', 'cx', 'cy', 'cz', 'da', 'db', 'dc', 'dd', 'de', 'df', 'dg', 'dh', 'di', 'dj', 'dk', 'dl', 'dm', 'dn', 'do', 'dp', 'dq', 'dr', 'ds', 'dt', 'du', 'dv', 'dw', 'dx', 'dy', 'dz', 'ea', 'eb', 'ec', 'ed', 'ee', 'ef', 'eg', 'eh', 'ei', 'ej', 'ek', 'el', 'em', 'en', 'eo', 'ep', 'eq', 'er', 'es', 'et', 'eu', 'ev', 'ew', 'ex', 'ey', 'ez', 'fa', 'fb', 'fc', 'fd', 'fe', 'ff', 'fg', 'fh', 'fi', 'fj', 'fk', 'fl', 'fm', 'fn', 'fo', 'fp', 'fq', 'fr', 'fs', 'ft', 'fu', 'fv', 'fw', 'fx', 'fy', 'fz', 'ga', 'gb', 'gc', 'gd', 'ge', 'gf', 'gg', 'gh', 'gi', 'gj', 'gk', 'gl', 'gm', 'gn', 'go', 'gp', 'gq', 'gr', 'gs', 'gt', 'gu', 'gv', 'gw', 'gx', 'gy', 'gz', 'ha', 'hb', 'hc', 'hd', 'he', 'hf', 'hg', 'hh', 'hi', 'hj', 'hk', 'hl', 'hm', 'hn', 'ho', 'hp', 'hq', 'hr', 'hs', 'ht', 'hu', 'hv', 'hw', 'hx', 'hy', 'hz', 'ia', 'ib', 'ic', 'id', 'ie', 'if', 'ig', 'ih', 'ii', 'ij', 'ik', 'il', 'im', 'in', 'io', 'ip', 'iq', 'ir', 'is', 'it', 'iu', 'iv', 'iw', 'ix', 'iy', 'iz', 'ja', 'jb', 'jc', 'jd', 'je', 'jf', 'jg', 'jh', 'ji', 'jj', 'jk', 'jl', 'jm', 'jn', 'jo', 'jp', 'jq', 'jr', 'js', 'jt', 'ju', 'jv', 'jw', 'jx', 'jy', 'jz', 'ka', 'kb', 'kc', 'kd', 'ke', 'kf', 'kg', 'kh', 'ki', 'kj', 'kk', 'kl', 'km', 'kn', 'ko', 'kp', 'kq', 'kr', 'ks', 'kt', 'ku', 'kv', 'kw', 'kx', 'ky', 'kz', 'la', 'lb', 'lc', 'ld', 'le', 'lf', 'lg', 'lh', 'li', 'lj', 'lk', 'll', 'lm', 'ln', 'lo', 'lp', 'lq', 'lr', 'ls', 'lt', 'lu', 'lv', 'lw', 'lx', 'ly', 'lz', 'ma', 'mb', 'mc', 'md', 'me', 'mf', 'mg', 'mh', 'mi', 'mj', 'mk', 'ml', 'mm', 'mn', 'mo', 'mp', 'mq', 'mr', 'ms', 'mt', 'mu', 'mv', 'mw', 'mx', 'my', 'mz', 'na', 'nb', 'nc', 'nd', 'ne', 'nf', 'ng', 'nh', 'ni', 'nj', 'nk', 'nl', 'nm', 'nn', 'no', 'np', 'nq', 'nr', 'ns', 'nt', 'nu', 'nv', 'nw', 'nx', 'ny', 'nz', 'oa', 'ob', 'oc', 'od', 'oe', 'of', 'og', 'oh', 'oi', 'oj', 'ok', 'ol', 'om', 'on', 'oo', 'op', 'oq', 'or', 'os', 'ot', 'ou', 'ov', 'ow', 'ox', 'oy', 'oz', 'pa', 'pb', 'pc', 'pd', 'pe', 'pf', 'pg', 'ph', 'pi', 'pj', 'pk', 'pl', 'pm', 'pn', 'po', 'pp', 'pq', 'pr', 'ps', 'pt', 'pu', 'pv', 'pw', 'px', 'py', 'pz', 'qa', 'qb', 'qc', 'qd', 'qe', 'qf', 'qg', 'qh', 'qi', 'qj', 'qk', 'ql', 'qm', 'qn', 'qo', 'qp', 'qq', 'qr', 'qs', 'qt', 'qu', 'qv', 'qw', 'qx', 'qy', 'qz', 'ra', 'rb', 'rc', 'rd', 're', 'rf', 'rg', 'rh', 'ri', 'rj', 'rk', 'rl', 'rm', 'rn', 'ro', 'rp', 'rq', 'rr', 'rs', 'rt', 'ru', 'rv', 'rw', 'rx', 'ry', 'rz', 'sa', 'sb', 'sc', 'sd', 'se', 'sf', 'sg', 'sh', 'si', 'sj', 'sk', 'sl', 'sm', 'sn', 'so', 'sp', 'sq', 'sr', 'ss', 'st', 'su', 'sv', 'sw', 'sx', 'sy', 'sz', 'ta', 'tb', 'tc', 'td', 'te', 'tf', 'tg', 'th', 'ti', 'tj', 'tk', 'tl', 'tm', 'tn', 'to', 'tp', 'tq', 'tr', 'ts', 'tt', 'tu', 'tv', 'tw', 'tx', 'ty', 'tz', 'ua', 'ub', 'uc', 'ud', 'ue', 'uf', 'ug', 'uh', 'ui', 'uj', 'uk', 'ul', 'um', 'un', 'uo', 'up', 'uq', 'ur', 'us', 'ut', 'uu', 'uv', 'uw', 'ux', 'uy', 'uz', 'va', 'vb', 'vc', 'vd', 've', 'vf', 'vg', 'vh', 'vi', 'vj', 'vk', 'vl', 'vm', 'vn', 'vo', 'vp', 'vq', 'vr', 'vs', 'vt', 'vu', 'vv', 'vw', 'vx', 'vy', 'vz', 'wa', 'wb', 'wc', 'wd', 'we', 'wf', 'wg', 'wh', 'wi', 'wj', 'wk', 'wl', 'wm', 'wn', 'wo', 'wp', 'wq', 'wr', 'ws', 'wt', 'wu', 'wv', 'ww', 'wx', 'wy', 'wz', 'xa', 'xb', 'xc', 'xd', 'xe', 'xf', 'xg', 'xh', 'xi', 'xj', 'xk', 'xl', 'xm', 'xn', 'xo', 'xp', 'xq', 'xr', 'xs', 'xt', 'xu', 'xv', 'xw', 'xx', 'xy', 'xz', 'ya', 'yb', 'yc', 'yd', 'ye', 'yf', 'yg', 'yh', 'yi', 'yj', 'yk', 'yl', 'ym', 'yn', 'yo', 'yp', 'yq', 'yr', 'ys', 'yt', 'yu', 'yv', 'yw', 'yx', 'yy', 'yz', 'za', 'zb', 'zc', 'zd', 'ze', 'zf', 'zg', 'zh', 'zi', 'zj', 'zk', 'zl', 'zm', 'zn', 'zo', 'zp', 'zq', 'zr', 'zs', 'zt', 'zu', 'zv', 'zw', 'zx', 'zy', 'zz']])
 
         # Mouse features
         if 'mouse' in patterns and patterns['mouse']:
@@ -167,25 +153,7 @@ class BiometricAuthenticator:
                 'total_mouse_distance', 'mouse_movements', 'click_count'
             ])
 
-        # Touch features
-        if 'touch' in patterns and patterns['touch']:
-            touch = patterns['touch']
-            features.extend([
-                touch.get('swipeCount', 0),
-                touch.get('avgSwipeLength', 0),
-                touch.get('avgSwipeDuration', 0),
-                touch.get('avgSwipePressure', 0)
-            ])
-            feature_names.extend([
-                'swipe_count', 'avg_swipe_length', 
-                'avg_swipe_duration', 'avg_swipe_pressure'
-            ])
-        else:
-            features.extend([0] * 4)
-            feature_names.extend([
-                'swipe_count', 'avg_swipe_length',
-                'avg_swipe_duration', 'avg_swipe_pressure'
-            ])
+        # Touch/swipe gesture features removed
 
         return np.array(features), feature_names
 
@@ -199,21 +167,20 @@ class BiometricAuthenticator:
 
             # Hash password
             password_hash = hashlib.sha256(password.encode()).hexdigest()
-            device_fingerprint = json.dumps(patterns.get('device', {}))
 
-            # Insert user
+            # Insert user (device fingerprint removed)
             cursor.execute("""
-                INSERT INTO users (username, password_hash, device_fingerprint)
-                VALUES (?, ?, ?)
-            """, (username, password_hash, device_fingerprint))
+                INSERT INTO users (username, password_hash)
+                VALUES (?, ?)
+            """, (username, password_hash))
 
             user_id = cursor.lastrowid
 
             # Extract and store behavioral patterns
             features, feature_names = self.extract_features(patterns)
 
-            # Store individual pattern types
-            for pattern_type in ['keystroke', 'mouse', 'touch']:
+            # Store individual pattern types (touch removed)
+            for pattern_type in ['keystroke', 'mouse']:
                 if pattern_type in patterns:
                     cursor.execute("""
                         INSERT INTO behavioral_patterns (user_id, pattern_type, features)
@@ -266,13 +233,13 @@ class BiometricAuthenticator:
             if password:
                 password_hash = hashlib.sha256(password.encode()).hexdigest()
                 cursor.execute("""
-                    SELECT id, device_fingerprint FROM users 
+                    SELECT id FROM users 
                     WHERE username = ? AND password_hash = ?
                 """, (username, password_hash))
             else:
                 # For biometric-only auth, just get user ID
                 cursor.execute("""
-                    SELECT id, device_fingerprint FROM users 
+                    SELECT id FROM users 
                     WHERE username = ?
                 """, (username,))
 
@@ -280,7 +247,7 @@ class BiometricAuthenticator:
             if not user_result:
                 return False, 0.0, "Invalid credentials"
 
-            user_id, stored_device_fp = user_result
+            user_id = user_result[0]
 
             # Get stored behavioral patterns
             cursor.execute("""
@@ -316,45 +283,10 @@ class BiometricAuthenticator:
             # Average similarity score
             avg_similarity = np.mean(similarity_scores)
 
-            # Device fingerprint check
-            device_similarity = 0.5  # Default moderate similarity
-            if stored_device_fp and stored_device_fp.strip():
-                try:
-                    stored_device = json.loads(stored_device_fp)
-                    current_device = patterns.get('device', {})
+            # Device fingerprint comparison removed
 
-                    # Check critical device attributes
-                    device_matches = 0
-                    device_checks = 0
-
-                    for key in ['userAgent', 'platform', 'screenResolution', 'colorDepth']:
-                        if key in stored_device and key in current_device:
-                            device_checks += 1
-                            if stored_device[key] == current_device[key]:
-                                device_matches += 1
-
-                    if device_checks > 0:
-                        device_similarity = device_matches / device_checks
-                        logger.info(f"Device fingerprint match: {device_matches}/{device_checks} = {device_similarity:.3f}")
-                    else:
-                        device_similarity = 0.5
-                        logger.warning("No device attributes found for comparison")
-                except json.JSONDecodeError:
-                    logger.warning("Invalid device fingerprint JSON, using default similarity")
-                    device_similarity = 0.5
-            else:
-                logger.warning("No stored device fingerprint found, using default similarity")
-                device_similarity = 0.5
-
-            # Improved confidence score calculation
-            # If behavioral similarity is very low, reduce its weight
-            if avg_similarity < 0.1:
-                # Very low behavioral similarity - rely more on device fingerprint
-                confidence_score = (avg_similarity * 0.3 + device_similarity * 0.7)
-                logger.info(f"Low behavioral similarity ({avg_similarity:.3f}), using device-weighted calculation")
-            else:
-                # Normal calculation
-                confidence_score = (avg_similarity * 0.7 + device_similarity * 0.3)
+            # Confidence score based solely on behavioral similarity
+            confidence_score = avg_similarity
             
             # Ensure confidence score is reasonable (not too low due to poor data)
             if confidence_score < 0.1:
@@ -372,14 +304,13 @@ class BiometricAuthenticator:
             if avg_similarity < 0.3:
                 security_flags.append("LOW_BEHAVIORAL_SIMILARITY")
             
-            if device_similarity < 0.4:
-                security_flags.append("DEVICE_MISMATCH")
+            # Device mismatch flag removed
             
             # If behavioral auth fails but confidence is above 0.5, flag for enhanced verification
             if not is_authenticated and confidence_score >= 0.5:
                 security_flags.append("REQUIRES_ENHANCED_VERIFICATION")
             
-            logger.info(f"Confidence calculation: behavioral={avg_similarity:.3f}, device={device_similarity:.3f}, final={confidence_score:.3f}")
+            logger.info(f"Confidence calculation: behavioral={avg_similarity:.3f}, final={confidence_score:.3f}")
 
             # Log authentication attempt
             cursor.execute("""
@@ -461,7 +392,7 @@ class BiometricAuthenticator:
 # Create Flask app instance
 app = Flask(__name__)
 app.secret_key = 'your-secret-key-here-change-in-production'
-CORS(app)
+CORS(app, supports_credentials=True, resources={r"/api/*": {"origins": ["http://localhost:5000","http://localhost:5001"]}})
 
 # Initialize the authenticator
 authenticator = BiometricAuthenticator()
@@ -661,6 +592,61 @@ def get_stats():
     except Exception as e:
         logger.error(f"Stats endpoint error: {str(e)}")
         return jsonify({'error': str(e)}), 500
+
+@app.route('/api/gmm-train', methods=['POST'])
+def api_gmm_train():
+    """Train GMM keystroke model from CSV and return ROC data"""
+    try:
+        data = request.get_json() or {}
+        csv_path = data.get('csv_path')
+        M = int(data.get('M', 3))
+        delta = float(data.get('delta', 1.0))
+        train_ratio = float(data.get('train_ratio', 0.7))
+        valid_ratio = float(data.get('valid_ratio', 0.3))
+
+        if not csv_path or not os.path.exists(csv_path):
+            return jsonify({'success': False, 'error': 'Valid csv_path required'}), 400
+
+        fpr, tpr, thresholds = train_gmm_model(
+            csv_path=csv_path,
+            M=M,
+            delta=delta,
+            train_ratio=train_ratio,
+            valid_ratio=valid_ratio
+        )
+
+        return jsonify({
+            'success': True,
+            'fpr': [float(x) for x in fpr.tolist()],
+            'tpr': [float(x) for x in tpr.tolist()],
+            'thresholds': [float(x) for x in thresholds.tolist()],
+            'params': {'M': M, 'delta': delta, 'train_ratio': train_ratio, 'valid_ratio': valid_ratio}
+        })
+
+    except Exception as e:
+        logger.error(f"GMM train endpoint error: {str(e)}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@app.route('/api/keystroke-knn', methods=['POST'])
+def api_keystroke_knn():
+    """Run notebook-inspired KNN keystroke pipeline and return CV accuracy and predictions"""
+    try:
+        data = request.get_json() or {}
+        train_csv = data.get('train_csv')
+        test_csv = data.get('test_csv')
+        num_bins = int(data.get('num_bins', 10))
+        n_neighbors = int(data.get('n_neighbors', 1))
+
+        if not train_csv or not os.path.exists(train_csv):
+            return jsonify({'success': False, 'error': 'Valid train_csv required'}), 400
+        if not test_csv or not os.path.exists(test_csv):
+            return jsonify({'success': False, 'error': 'Valid test_csv required'}), 400
+
+        result = run_keystroke_knn(train_csv=train_csv, test_csv=test_csv, num_bins=num_bins, n_neighbors=n_neighbors)
+        return jsonify({'success': True, **result})
+    except Exception as e:
+        logger.error(f"Keystroke KNN endpoint error: {str(e)}")
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 @app.route('/api/network-info', methods=['GET'])
 def get_network_info():
