@@ -486,6 +486,34 @@
                     // Show authenticated user info
                     document.getElementById('authenticated-user').textContent = username;
                     document.getElementById('user-section').style.display = 'block';
+                } else if (result.requires_enhanced_verification) {
+                    showStatus('warning', `Enhanced verification required. Confidence score: ${(result.confidence_score * 100).toFixed(1)}%`);
+                    
+                    // Show enhanced verification button
+                    const enhancedAuthBtn = document.createElement('button');
+                    enhancedAuthBtn.textContent = 'Start Enhanced Verification';
+                    enhancedAuthBtn.className = 'btn enhanced-auth-btn';
+                    enhancedAuthBtn.style.background = 'linear-gradient(45deg, #ff6b6b, #ee5a24)';
+                    enhancedAuthBtn.style.marginTop = '10px';
+                    enhancedAuthBtn.onclick = () => {
+                        window.location.href = result.redirect_url;
+                    };
+                    
+                    // Add button to status area
+                    const statusDiv = document.querySelector('.status');
+                    statusDiv.appendChild(enhancedAuthBtn);
+                    
+                    // Show security flags if any
+                    if (result.security_flags && result.security_flags.length > 0) {
+                        const flagsDiv = document.createElement('div');
+                        flagsDiv.innerHTML = '<strong>Security Flags:</strong><br>' + result.security_flags.join(', ');
+                        flagsDiv.style.marginTop = '10px';
+                        flagsDiv.style.padding = '10px';
+                        flagsDiv.style.background = '#fff3cd';
+                        flagsDiv.style.border = '1px solid #ffeaa7';
+                        flagsDiv.style.borderRadius = '5px';
+                        statusDiv.appendChild(flagsDiv);
+                    }
                 } else {
                     showStatus('error', `${result.error}. Confidence score: ${(result.confidence_score * 100).toFixed(1)}%`);
                 }

@@ -361,9 +361,23 @@ class BiometricAuthenticator:
                 confidence_score = 0.1  # Minimum reasonable confidence
                 logger.warning(f"Confidence score too low, adjusted to {confidence_score}")
 
-            # Authentication threshold
-            auth_threshold = 0.65
+            # Enhanced authentication threshold with stricter requirements
+            auth_threshold = 0.85  # Increased from 0.65 to 0.85 for better security
             is_authenticated = confidence_score >= auth_threshold
+            
+            # Additional security checks
+            security_flags = []
+            
+            # Check for suspicious patterns
+            if avg_similarity < 0.3:
+                security_flags.append("LOW_BEHAVIORAL_SIMILARITY")
+            
+            if device_similarity < 0.4:
+                security_flags.append("DEVICE_MISMATCH")
+            
+            # If behavioral auth fails but confidence is above 0.5, flag for enhanced verification
+            if not is_authenticated and confidence_score >= 0.5:
+                security_flags.append("REQUIRES_ENHANCED_VERIFICATION")
             
             logger.info(f"Confidence calculation: behavioral={avg_similarity:.3f}, device={device_similarity:.3f}, final={confidence_score:.3f}")
 
@@ -389,10 +403,17 @@ class BiometricAuthenticator:
 
             conn.commit()
 
-            status_msg = "Authentication successful" if is_authenticated else "Behavioral patterns do not match"
+            # Determine authentication result and next steps
+            if is_authenticated:
+                status_msg = "Authentication successful"
+            elif "REQUIRES_ENHANCED_VERIFICATION" in security_flags:
+                status_msg = "REQUIRES_ENHANCED_VERIFICATION"
+            else:
+                status_msg = "Behavioral patterns do not match"
+            
             logger.info(f"Authentication attempt for {username}: {is_authenticated} (confidence: {confidence_score:.3f})")
 
-            return is_authenticated, confidence_score, status_msg
+            return is_authenticated, confidence_score, status_msg, security_flags
 
         except sqlite3.OperationalError as e:
             if "database is locked" in str(e):
@@ -515,9 +536,14 @@ def login_user():
         patterns = data.get('patterns', {})
         
         # Authenticate the user
-        is_authenticated, confidence_score, message = authenticator.authenticate_user(
-            username, password, patterns
-        )
+        auth_result = authenticator.authenticate_user(username, password, patterns)
+        
+        if len(auth_result) == 4:
+            is_authenticated, confidence_score, message, security_flags = auth_result
+        else:
+            # Handle old return format for backward compatibility
+            is_authenticated, confidence_score, message = auth_result
+            security_flags = []
         
         if is_authenticated:
             # Set session
@@ -530,6 +556,19 @@ def login_user():
                 'confidence_score': confidence_score,
                 'username': username
             })
+        elif message == "REQUIRES_ENHANCED_VERIFICATION":
+            # Set session for enhanced verification
+            session['user_id'] = username
+            session['needs_enhanced_verification'] = True
+            
+            return jsonify({
+                'success': False,
+                'requires_enhanced_verification': True,
+                'message': 'Enhanced verification required for security',
+                'confidence_score': confidence_score,
+                'security_flags': security_flags,
+                'redirect_url': '/enhanced-auth'
+            }), 202  # 202 Accepted - requires additional verification
         else:
             return jsonify({
                 'success': False,
@@ -639,11 +678,110 @@ def get_network_info():
         logger.error(f"Network info error: {str(e)}")
         return jsonify({'error': str(e)}), 500
 
+@app.route('/enhanced-auth')
+def enhanced_auth_redirect():
+    """Redirect to enhanced authentication page"""
+    if not session.get('needs_enhanced_verification'):
+        return jsonify({'error': 'Enhanced verification not required'}), 400
+    
+    # Return HTML page for enhanced authentication
+    return """
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Enhanced Authentication Required</title>
+        <style>
+            body {
+                font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                margin: 0;
+                padding: 20px;
+                min-height: 100vh;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+            }
+            .auth-container {
+                background: white;
+                border-radius: 20px;
+                box-shadow: 0 20px 40px rgba(0,0,0,0.1);
+                padding: 40px;
+                max-width: 600px;
+                width: 100%;
+                text-align: center;
+            }
+            .auth-header h1 {
+                color: #333;
+                margin-bottom: 10px;
+                font-size: 2.5em;
+            }
+            .auth-header p {
+                color: #666;
+                font-size: 1.1em;
+            }
+            .btn {
+                background: linear-gradient(45deg, #007bff, #0056b3);
+                color: white;
+                border: none;
+                padding: 15px 30px;
+                border-radius: 25px;
+                font-size: 1.1em;
+                cursor: pointer;
+                transition: all 0.3s ease;
+                margin: 10px;
+                text-decoration: none;
+                display: inline-block;
+            }
+            .btn:hover {
+                transform: translateY(-2px);
+                box-shadow: 0 10px 20px rgba(0,123,255,0.3);
+            }
+            .security-info {
+                background: #e3f2fd;
+                border: 1px solid #bbdefb;
+                border-radius: 10px;
+                padding: 15px;
+                margin: 20px 0;
+                text-align: left;
+            }
+        </style>
+    </head>
+    <body>
+        <div class="auth-container">
+            <div class="auth-header">
+                <h1>🔐 Enhanced Authentication Required</h1>
+                <p>Additional verification needed for security</p>
+            </div>
+            
+            <div class="security-info">
+                <h4>🛡️ Why Enhanced Verification?</h4>
+                <p>Your behavioral patterns didn't match our security requirements. To ensure your account security, we need additional verification through:</p>
+                <ul>
+                    <li>Face recognition scan</li>
+                    <li>Voice pattern analysis</li>
+                    <li>Location and device verification</li>
+                </ul>
+            </div>
+            
+            <a href="http://localhost:5001/enhanced-auth" class="btn">
+                Start Enhanced Verification
+            </a>
+            
+            <p style="margin-top: 20px; color: #666;">
+                This process takes about 2-3 minutes and helps protect your account.
+            </p>
+        </div>
+    </body>
+    </html>
+    """
+
 if __name__ == '__main__':
-    print("🚀 Starting Integrated Behavioral Biometric Authentication Server...")
-    print("📱 Frontend available at: http://localhost:5000")
-    print("🔌 API endpoints available at: http://localhost:5000/api/")
-    print("📊 Health check: http://localhost:5000/api/health")
+    print("Starting Integrated Behavioral Biometric Authentication Server...")
+    print("Frontend available at: http://localhost:5000")
+    print("API endpoints available at: http://localhost:5000/api/")
+    print("Health check: http://localhost:5000/api/health")
     
     # Run the Flask app
     app.run(debug=True, host='0.0.0.0', port=5000)
