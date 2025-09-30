@@ -43,7 +43,7 @@ def check_dependencies():
     """Check if required dependencies are installed"""
     required_packages = [
         'flask', 'flask_cors', 'numpy', 'pandas', 'scikit_learn', 
-        'scipy', 'opencv-python', 'face_recognition', 'librosa', 
+        'scipy', 'opencv-python', 'librosa', 
         'soundfile', 'requests'
     ]
     
@@ -53,8 +53,6 @@ def check_dependencies():
         try:
             if package == 'opencv-python':
                 import cv2
-            elif package == 'face_recognition':
-                import face_recognition
             elif package == 'scikit_learn':
                 import sklearn
             elif package == 'flask_cors':
@@ -63,6 +61,15 @@ def check_dependencies():
                 __import__(package.replace('-', '_'))
         except ImportError:
             missing_packages.append(package)
+
+    # Face recognition is optional; report if missing but do not fail startup checks
+    try:
+        import face_recognition  # noqa: F401
+        face_ok = True
+    except Exception as e:
+        face_ok = False
+        print("⚠️  Optional dependency missing: face_recognition ->", str(e))
+        print("   Face verification will be disabled. Other features work normally.")
     
     if missing_packages:
         print("❌ Missing required packages:")
@@ -72,7 +79,10 @@ def check_dependencies():
         print("   pip install -r requirements.txt")
         return False
     
-    print("✅ All required dependencies are installed")
+    if face_ok:
+        print("✅ All required dependencies are installed (including face_recognition)")
+    else:
+        print("✅ Core dependencies installed. Face recognition is disabled (optional).")
     return True
 
 def main():

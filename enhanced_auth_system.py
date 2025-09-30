@@ -16,7 +16,13 @@ from datetime import datetime
 from flask import Flask, request, jsonify, session, render_template_string
 from flask_cors import CORS
 import logging
-import face_recognition
+try:
+    import face_recognition
+    FACE_RECOGNITION_AVAILABLE = True
+    FACE_IMPORT_ERROR = None
+except Exception as _face_import_error:  # ImportError or other env errors on Windows
+    FACE_RECOGNITION_AVAILABLE = False
+    FACE_IMPORT_ERROR = str(_face_import_error)
 import librosa
 import soundfile as sf
 from scipy.spatial.distance import cosine
@@ -101,6 +107,8 @@ class EnhancedAuthenticator:
     def extract_face_features(self, image_data):
         """Extract face features from image"""
         try:
+            if not FACE_RECOGNITION_AVAILABLE:
+                return None, f"Face recognition not available: {FACE_IMPORT_ERROR}"
             # Decode base64 image
             if isinstance(image_data, str):
                 image_data = base64.b64decode(image_data.split(',')[1])
@@ -174,6 +182,8 @@ class EnhancedAuthenticator:
     def verify_face(self, user_id, face_encoding):
         """Verify user's face against stored biometrics"""
         try:
+            if not FACE_RECOGNITION_AVAILABLE:
+                return False, 0.0, f"Face recognition not available: {FACE_IMPORT_ERROR}"
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
             
@@ -365,7 +375,7 @@ class EnhancedAuthenticator:
         
         try:
             # Face verification
-            if face_data:
+            if face_data and FACE_RECOGNITION_AVAILABLE:
                 face_encoding, face_msg = self.extract_face_features(face_data)
                 if face_encoding is not None:
                     face_verified, face_confidence, face_result = self.verify_face(user_id, face_encoding)
@@ -375,6 +385,9 @@ class EnhancedAuthenticator:
                         verification_results['security_flags'].append("FACE_VERIFICATION_FAILED")
                 else:
                     verification_results['security_flags'].append("FACE_EXTRACTION_FAILED")
+            elif face_data and not FACE_RECOGNITION_AVAILABLE:
+                logger.warning(f"Face verification skipped: module unavailable ({FACE_IMPORT_ERROR})")
+                verification_results['security_flags'].append("FACE_MODULE_MISSING")
             
             # Voice verification
             if voice_data:

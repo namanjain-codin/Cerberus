@@ -175,6 +175,11 @@ class BiometricAuthenticator:
 
         # Touch/swipe gesture features removed
 
+        # Debug: Log feature extraction
+        logger.info(f"Extracted {len(features)} features")
+        logger.info(f"Feature names: {feature_names[:10] if len(feature_names) > 10 else feature_names}")
+        logger.info(f"Feature values sample: {features[:10] if len(features) > 10 else features}")
+        
         return np.array(features), feature_names
 
     def _compute_advanced_keystroke_features(self, keystroke_obj: dict):
@@ -463,25 +468,65 @@ class BiometricAuthenticator:
                 min_len = min(len(current_features), len(stored_features))
                 current_trimmed = current_features[:min_len]
                 stored_trimmed = stored_features[:min_len]
-
-                # Calculate euclidean distance similarity
-                distance = euclidean(current_trimmed, stored_trimmed)
-                max_possible_distance = np.sqrt(len(current_trimmed)) * 1000  # Normalize
-                similarity = max(0, 1 - (distance / max_possible_distance))
+                
+                # Debug: Check for NaN or infinite values
+                if np.any(np.isnan(current_trimmed)) or np.any(np.isnan(stored_trimmed)):
+                    logger.warning(f"NaN values found in features for {username}")
+                    similarity = 0.0
+                elif np.any(np.isinf(current_trimmed)) or np.any(np.isinf(stored_trimmed)):
+                    logger.warning(f"Inf values found in features for {username}")
+                    similarity = 0.0
+                else:
+                    # Use a simple percentage-based similarity approach
+                    # Calculate how many features are "close enough"
+                    tolerance = 0.1  # 10% tolerance for each feature
+                    close_features = 0
+                    total_features = len(current_trimmed)
+                    
+                    for i in range(total_features):
+                        current_val = current_trimmed[i]
+                        stored_val = stored_trimmed[i]
+                        
+                        # Calculate relative difference
+                        if stored_val != 0:
+                            relative_diff = abs(current_val - stored_val) / abs(stored_val)
+                        else:
+                            relative_diff = abs(current_val) if current_val != 0 else 0
+                        
+                        if relative_diff <= tolerance:
+                            close_features += 1
+                    
+                    # Similarity is the percentage of features that are close
+                    similarity = close_features / total_features if total_features > 0 else 0.0
+                    
+                    # Debug logging
+                    logger.info(f"Close features: {close_features}/{total_features}, Similarity: {similarity:.4f}")
                 similarity_scores.append(similarity)
 
             # Average similarity score
             avg_similarity = np.mean(similarity_scores)
+            
+            # Log similarity scores for debugging
+            logger.info(f"Similarity scores for {username}: {[f'{s:.4f}' for s in similarity_scores]}")
+            logger.info(f"Average similarity: {avg_similarity:.4f}")
+            logger.info(f"Feature count: {len(current_features)}")
+            logger.info(f"Current features sample: {current_features[:10] if len(current_features) > 10 else current_features}")
+            logger.info(f"Stored patterns count: {len(stored_patterns)}")
 
             # Device fingerprint comparison removed
 
             # Confidence score based solely on behavioral similarity
             confidence_score = avg_similarity
             
-            # Ensure confidence score is reasonable (not too low due to poor data)
-            if confidence_score < 0.1:
-                confidence_score = 0.1  # Minimum reasonable confidence
-                logger.warning(f"Confidence score too low, adjusted to {confidence_score}")
+            # Remove artificial minimums - let the natural similarity score stand
+            # Only apply minimal bounds to prevent invalid values
+            
+            # Allow very low scores for poor matches - no artificial floor
+            # Keep score within [0,1] bounds only
+            if confidence_score < 0.0:
+                confidence_score = 0.0
+            elif confidence_score > 1.0:
+                confidence_score = 1.0
 
             # Enhanced authentication threshold with stricter requirements
             auth_threshold = 0.85  # Increased from 0.65 to 0.85 for better security
@@ -856,283 +901,103 @@ def get_network_info():
 
 @app.route('/enhanced-auth')
 def enhanced_auth_redirect():
-    """Serve enhanced authentication page with PAN upload and live capture"""
+    """Redirect to enhanced authentication page"""
     if not session.get('needs_enhanced_verification'):
         return jsonify({'error': 'Enhanced verification not required'}), 400
     
+    # Return HTML page for enhanced authentication
     return """
     <!DOCTYPE html>
-    <html lang=\"en\">
+    <html lang="en">
     <head>
-        <meta charset=\"UTF-8\">
-        <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">
-        <title>Enhanced Authentication - PAN Verification</title>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Enhanced Authentication Required</title>
         <style>
-            body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #f5f7fb; margin: 0; padding: 20px; }
-            .wrapper { max-width: 900px; margin: 0 auto; }
-            .card { background: #fff; border-radius: 14px; box-shadow: 0 12px 30px rgba(0,0,0,0.08); padding: 24px; margin-bottom: 20px; }
-            h1 { margin: 0 0 8px; }
-            p.muted { color: #6b7280; margin-top: 0; }
-            .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
-            .section-title { font-weight: 600; margin-bottom: 8px; }
-            .preview { width: 100%; aspect-ratio: 4/3; background: #f3f4f6; border: 2px dashed #d1d5db; border-radius: 10px; display: flex; align-items: center; justify-content: center; overflow: hidden; position: relative; }
-            .preview img, .preview video, .preview canvas { width: 100%; height: 100%; object-fit: contain; }
-            .btn { background: linear-gradient(45deg, #2563eb, #1d4ed8); color: #fff; border: 0; padding: 10px 16px; border-radius: 10px; cursor: pointer; font-size: 14px; }
-            .btn.secondary { background: #111827; }
-            .btn.warning { background: linear-gradient(45deg, #f59e0b, #d97706); }
-            .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
-            .status { margin-top: 12px; padding: 10px; border-radius: 8px; display: none; }
-            .status.success { background: #dcfce7; color: #166534; border: 1px solid #bbf7d0; display: block; }
-            .status.error { background: #fee2e2; color: #991b1b; border: 1px solid #fecaca; display: block; }
-            .status.info { background: #e0f2fe; color: #075985; border: 1px solid #bae6fd; display: block; }
-            .caption { font-size: 12px; color: #6b7280; margin-top: 6px; }
-            input[type=file] { display:none; }
-            .file-label { display:inline-block; padding:10px 16px; border:2px dashed #d1d5db; border-radius:10px; cursor:pointer; background:#f9fafb; }
+            body {
+                font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                margin: 0;
+                padding: 20px;
+                min-height: 100vh;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+            }
+            .auth-container {
+                background: white;
+                border-radius: 20px;
+                box-shadow: 0 20px 40px rgba(0,0,0,0.1);
+                padding: 40px;
+                max-width: 600px;
+                width: 100%;
+                text-align: center;
+            }
+            .auth-header h1 {
+                color: #333;
+                margin-bottom: 10px;
+                font-size: 2.5em;
+            }
+            .auth-header p {
+                color: #666;
+                font-size: 1.1em;
+            }
+            .btn {
+                background: linear-gradient(45deg, #007bff, #0056b3);
+                color: white;
+                border: none;
+                padding: 15px 30px;
+                border-radius: 25px;
+                font-size: 1.1em;
+                cursor: pointer;
+                transition: all 0.3s ease;
+                margin: 10px;
+                text-decoration: none;
+                display: inline-block;
+            }
+            .btn:hover {
+                transform: translateY(-2px);
+                box-shadow: 0 10px 20px rgba(0,123,255,0.3);
+            }
+            .security-info {
+                background: #e3f2fd;
+                border: 1px solid #bbdefb;
+                border-radius: 10px;
+                padding: 15px;
+                margin: 20px 0;
+                text-align: left;
+            }
         </style>
     </head>
     <body>
-        <div class=\"wrapper\">
-            <div class=\"card\">
-                <h1>🔐 Enhanced Authentication</h1>
-                <p class=\"muted\">Please upload your PAN card and capture a live photo to continue.</p>
+        <div class="auth-container">
+            <div class="auth-header">
+                <h1>🔐 Enhanced Authentication Required</h1>
+                <p>Additional verification needed for security</p>
             </div>
-
-            <div class=\"card\">
-                <div class=\"grid\">
-                    <div>
-                        <div class=\"section-title\">1) Upload PAN Card</div>
-                        <div class=\"preview\" id=\"panPreview\">No PAN image selected</div>
-                        <div class=\"row\" style=\"margin-top:10px\">
-                            <label class=\"file-label\" for=\"panInput\">Choose PAN Image</label>
-                            <input id=\"panInput\" type=\"file\" accept=\"image/*\" />
-                            <button class=\"btn secondary\" id=\"clearPanBtn\">Clear</button>
-                        </div>
-                        <div class=\"caption\">Use a clear, well-lit scan or photo of your PAN card.</div>
-                    </div>
-                    <div>
-                        <div class=\"section-title\">2) Live Capture</div>
-                        <div class=\"preview\" id=\"livePreview\">
-                            <video id=\"liveVideo\" autoplay playsinline></video>
-                            <canvas id=\"liveCanvas\" style=\"display:none\"></canvas>
-                        </div>
-                        <div class=\"row\" style=\"margin-top:10px\">
-                            <button class=\"btn\" id=\"startCamBtn\">Start Camera</button>
-                            <button class=\"btn warning\" id=\"captureBtn\">Capture Snapshot</button>
-                            <button class=\"btn secondary\" id=\"retakeBtn\">Retake</button>
-                        </div>
-                        <div class=\"caption\">Center your face, remove glasses/masks, and look straight at the camera.</div>
-                    </div>
-                </div>
-                <div class=\"row\" style=\"margin-top:16px\">
-                    <button class=\"btn\" id=\"verifyBtn\">Verify & Continue</button>
-                </div>
-                <div id=\"status\" class=\"status info\">Please provide both images to proceed.</div>
+            
+            <div class="security-info">
+                <h4>🛡️ Why Enhanced Verification?</h4>
+                <p>Your behavioral patterns didn't match our security requirements. To ensure your account security, we need additional verification through:</p>
+                <ul>
+                    <li>Face recognition scan</li>
+                    <li>Voice pattern analysis</li>
+                    <li>Location and device verification</li>
+                </ul>
             </div>
-        </div>
-
-        <script>
-            const panInput = document.getElementById('panInput');
-            const panPreview = document.getElementById('panPreview');
-            const liveVideo = document.getElementById('liveVideo');
-            const liveCanvas = document.getElementById('liveCanvas');
-            const livePreview = document.getElementById('livePreview');
-            const verifyBtn = document.getElementById('verifyBtn');
-            const startCamBtn = document.getElementById('startCamBtn');
-            const captureBtn = document.getElementById('captureBtn');
-            const retakeBtn = document.getElementById('retakeBtn');
-            const clearPanBtn = document.getElementById('clearPanBtn');
-            const statusDiv = document.getElementById('status');
-
-            let panDataUrl = null;
-            let liveDataUrl = null;
-            let mediaStream = null;
-
-            function setStatus(type, msg) {
-                statusDiv.className = 'status ' + type;
-                statusDiv.textContent = msg;
-                statusDiv.style.display = 'block';
-            }
-
-            panInput.addEventListener('change', () => {
-                const file = panInput.files && panInput.files[0];
-                if (!file) { return; }
-                const reader = new FileReader();
-                reader.onload = e => {
-                    panDataUrl = e.target.result;
-                    panPreview.innerHTML = '<img alt=\"PAN preview\" src=\"' + panDataUrl + '\" />';
-                    setStatus('info', 'PAN image loaded.');
-                };
-                reader.readAsDataURL(file);
-            });
-
-            clearPanBtn.addEventListener('click', () => {
-                panInput.value = '';
-                panDataUrl = null;
-                panPreview.textContent = 'No PAN image selected';
-            });
-
-            startCamBtn.addEventListener('click', async () => {
-                try {
-                    mediaStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' }, audio: false });
-                    liveVideo.srcObject = mediaStream;
-                    liveCanvas.style.display = 'none';
-                    liveVideo.style.display = 'block';
-                    setStatus('info', 'Camera started.');
-                } catch (err) {
-                    setStatus('error', 'Failed to access camera: ' + err.message);
-                }
-            });
-
-            captureBtn.addEventListener('click', () => {
-                if (!liveVideo.videoWidth) { setStatus('error', 'Camera not ready.'); return; }
-                liveCanvas.width = liveVideo.videoWidth;
-                liveCanvas.height = liveVideo.videoHeight;
-                const ctx = liveCanvas.getContext('2d');
-                ctx.drawImage(liveVideo, 0, 0);
-                liveDataUrl = liveCanvas.toDataURL('image/jpeg', 0.92);
-                liveCanvas.style.display = 'block';
-                liveVideo.style.display = 'none';
-                setStatus('info', 'Snapshot captured.');
-            });
-
-            retakeBtn.addEventListener('click', () => {
-                liveDataUrl = null;
-                liveCanvas.style.display = 'none';
-                liveVideo.style.display = 'block';
-                setStatus('info', 'You can capture again.');
-            });
-
-            async function postJSON(url, data) {
-                const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) });
-                const json = await res.json();
-                if (!res.ok) throw new Error(json.error || json.message || 'Request failed');
-                return json;
-            }
-
-            verifyBtn.addEventListener('click', async () => {
-                if (!panDataUrl) { setStatus('error', 'Please upload PAN image.'); return; }
-                if (!liveDataUrl) { setStatus('error', 'Please capture a live photo.'); return; }
-                try {
-                    setStatus('info', 'Verifying face match...');
-                    const result = await postJSON('/api/pan-verify', { pan_image: panDataUrl, live_image: liveDataUrl });
-                    if (result.success && result.verified) {
-                        setStatus('success', 'Verification successful. Redirecting...');
-                        window.location.href = '/bank';
-                    } else {
-                        setStatus('error', 'Verification failed: ' + (result.message || 'Face did not match'));
-                    }
-                } catch (e) {
-                    setStatus('error', e.message);
-                }
-            });
-
-            window.addEventListener('beforeunload', () => {
-                if (mediaStream) { mediaStream.getTracks().forEach(t => t.stop()); }
-            });
-        </script>
-    </body>
-    </html>
-    """
-
-@app.route('/api/pan-verify', methods=['POST'])
-def api_pan_verify():
-    """Compare face on PAN image with live-captured face and set enhanced session on success"""
-    try:
-        if not session.get('user_id'):
-            return jsonify({'success': False, 'error': 'No active session'}), 401
-
-        data = request.get_json() or {}
-        pan_image_data = data.get('pan_image')
-        live_image_data = data.get('live_image')
-        if not pan_image_data or not live_image_data:
-            return jsonify({'success': False, 'error': 'Both pan_image and live_image are required'}), 400
-
-        import base64, io
-        try:
-            import face_recognition  # Lazy import to avoid hard dependency on startup
-        except Exception as e:
-            return jsonify({'success': False, 'error': 'face_recognition not available: ' + str(e)}), 500
-
-        def decode_data_url(data_url: str) -> bytes:
-            # format: data:image/jpeg;base64,XXXX
-            if ',' in data_url:
-                data_url = data_url.split(',', 1)[1]
-            return base64.b64decode(data_url)
-
-        pan_bytes = decode_data_url(pan_image_data)
-        live_bytes = decode_data_url(live_image_data)
-
-        pan_image = face_recognition.load_image_file(io.BytesIO(pan_bytes))
-        live_image = face_recognition.load_image_file(io.BytesIO(live_bytes))
-
-        pan_locations = face_recognition.face_locations(pan_image)
-        live_locations = face_recognition.face_locations(live_image)
-        if not pan_locations:
-            return jsonify({'success': False, 'error': 'No face detected in PAN image'}), 400
-        if not live_locations:
-            return jsonify({'success': False, 'error': 'No face detected in live image'}), 400
-
-        pan_encoding = face_recognition.face_encodings(pan_image, known_face_locations=pan_locations)
-        live_encoding = face_recognition.face_encodings(live_image, known_face_locations=live_locations)
-        if not pan_encoding or not live_encoding:
-            return jsonify({'success': False, 'error': 'Failed to extract face encodings'}), 400
-
-        distance = float(face_recognition.face_distance([pan_encoding[0]], live_encoding[0])[0])
-        similarity = max(0.0, 1.0 - distance)
-        threshold = 0.6  # lower distance => higher similarity
-        verified = distance <= threshold
-
-        result = {
-            'success': True,
-            'verified': bool(verified),
-            'similarity': similarity,
-            'distance': distance,
-            'threshold': threshold
-        }
-
-        if verified:
-            session['enhanced_verified'] = True
-            session['needs_enhanced_verification'] = False
-            return jsonify(result)
-        else:
-            result['message'] = 'Face mismatch'
-            return jsonify(result), 401
-    except Exception as e:
-        return jsonify({'success': False, 'error': str(e)}), 500
-
-@app.route('/bank')
-def bank_landing_page():
-    """Simple bank landing page shown after successful enhanced verification"""
-    if not session.get('enhanced_verified'):
-        return jsonify({'error': 'Access denied. Complete enhanced verification first.'}), 403
-    return """
-    <!DOCTYPE html>
-    <html lang=\"en\">
-    <head>
-        <meta charset=\"UTF-8\" />
-        <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\" />
-        <title>MyBank - Dashboard</title>
-        <style>
-            body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background:#f5f5f5; margin:0; padding:20px; }
-            .card { max-width:900px; margin:0 auto; background:#fff; border-radius:14px; box-shadow:0 12px 30px rgba(0,0,0,0.08); padding:24px; }
-            h1 { margin-top:0; }
-            .row { display:flex; gap:12px; flex-wrap:wrap; }
-            .tile { flex:1 1 260px; background:#f9fafb; border:1px solid #e5e7eb; border-radius:12px; padding:16px; }
-        </style>
-    </head>
-    <body>
-        <div class=\"card\">
-            <h1>🏦 Welcome to MyBank</h1>
-            <p>You have successfully completed enhanced verification.</p>
-            <div class=\"row\" style=\"margin-top:12px\">
-                <div class=\"tile\"><strong>Account Balance</strong><div>₹ 1,20,450.00</div></div>
-                <div class=\"tile\"><strong>Recent Transaction</strong><div>UPI Payment - ₹ 650.00</div></div>
-                <div class=\"tile\"><strong>Quick Actions</strong><div>Transfer | Pay Bills | Statements</div></div>
-            </div>
+            
+            <a href="http://localhost:5001/enhanced-auth" class="btn">
+                Start Enhanced Verification
+            </a>
+            
+            <p style="margin-top: 20px; color: #666;">
+                This process takes about 2-3 minutes and helps protect your account.
+            </p>
         </div>
     </body>
     </html>
     """
+
 if __name__ == '__main__':
     print("Starting Integrated Behavioral Biometric Authentication Server...")
     print("Frontend available at: http://localhost:5000")
